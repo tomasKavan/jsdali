@@ -1,0 +1,33 @@
+{
+  "name": "dali",
+  "version": "1.0.0",
+  "description": "Node.js DALI protocol implementation",
+  "main": "main.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start:dev": "npx nodemon",
+    "build": "rimraf ./build && tsc",
+    "start": "npm run build && node build/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomasKavan/node-dali.git"
+  },
+  "author": "Tomas Kavan <t.kavan@me.com>",
+  "license": "BSD-2-Clause",
+  "bugs": {
+    "url": "https://github.com/tomasKavan/node-dali/issues"
+  },
+  "homepage": "https://github.com/tomasKavan/node-dali#readme",
+  "devDependencies": {
+    "@types/node": "^20.8.3",
+    "nodemon": "^3.0.1",
+    "rimraf": "^5.0.5",
+    "serialport": "^12.0.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "keypress": "^0.2.1"
+  }
+}
