@@ -14,7 +14,7 @@ export const enum DALICommandCode {
   OnAndStepUp = 8,
   EnableDAPCsequence = 9,
   GoToLastActiveLevel = 10,
-  GoToScene = 11,  // param scene number (0-15)
+  GoToScene = 16,  // param scene number (0-15)
   
   // Konfiguration commands
   Reset = 32,
@@ -128,10 +128,84 @@ export const enum DALIValueType {
 
 export type DALIAddress = {
   type: DALIAddressType,
-  value: number
+  value?: number
+}
+
+export type DALICommandObj = {
+  code: DALICommandCode,
+  shortAddress?: number,
+  groupAddress?: number,
+  broadcast?: boolean,
+  dataByte?: number,
+  group?: number,
+  scene?: number,
+  random?: number,
 }
 
 export class DALICommand {
+
+  public static AddressFromObj(obj: DALICommandObj): DALIAddress | undefined {
+    if (obj.shortAddress != null) {
+      return {
+        type: DALIAddressType.Short,
+        value: obj.shortAddress as number
+      }
+    }
+    if (obj.groupAddress != null) {
+      return {
+        type: DALIAddressType.Short,
+        value: obj.groupAddress as number
+      }
+    }
+
+    return {
+      type: DALIAddressType.Broadcast
+    }
+  }
+
+  public static ValueTypeForCommand(cmd: DALICommandCode): DALIValueType {
+    if (cmd === DALICommandCode.DAPC){
+      return DALIValueType.DataByte
+    }
+    if (cmd === DALICommandCode.GoToScene || DALICommandCode.StoreDTRasScene || DALICommandCode.RemoveScene || DALICommandCode.QuerySceneLevel) {
+      return DALIValueType.Scene
+    }
+    if (cmd === DALICommandCode.AddToGroup || DALICommandCode.RemoveFromGroup) {
+      return DALIValueType.Group
+    }
+    if (cmd === DALICommandCode.ProgramShortAddress || DALICommandCode.VerifyShortAddress) {
+      return DALIValueType.Short
+    }
+    if (cmd >= DALICommandCode.SearchAddressH && cmd <= DALICommandCode.SearchAddressL) {
+      return DALIValueType.Random
+    }
+    if (cmd === DALICommandCode.DataTransferRegister || cmd === DALICommandCode.Initialize
+      || (cmd >= DALICommandCode.EnableDeviceOfType && cmd <= DALICommandCode.WriteMemoryLocation)) {
+      return DALIValueType.DataByte
+    }
+    return DALIValueType.Null
+  }
+
+  public static ValueFromObj(obj: DALICommandObj): number | undefined {
+    const valueType = DALICommand.ValueTypeForCommand(obj.code)
+    if (valueType === DALIValueType.DataByte) {
+      return obj.dataByte
+    }
+    if (valueType === DALIValueType.Scene) {
+      return obj.scene
+    }
+    if (valueType === DALIValueType.Group) {
+      return obj.group
+    }
+    if (valueType === DALIValueType.Short) {
+      return obj.short
+    }
+    if (valueType === DALIValueType.Random) {
+      return obj.random
+    }
+
+    return undefined
+  }
 
   public static Short(val: number): DALIAddress {
     return {
@@ -160,37 +234,53 @@ export class DALICommand {
     return new DALICommand(DALICommandCode.DAPC, address, val)
   }
 
-  public static Off(address: Address) {
+  public static Off(address: DALIAddress) {
     return new DALICommand(DALICommandCode.Off, address)
   }
 
-
   private _code: DALICommandCode
-  private _address: DALIAddress
+  private _address?: DALIAddress
   private _value?: number
-  private _valueType: DALIValueType = DALIValueType.Null
-
+  private _error?: Error
 
   public get code(): DALICommandCode {
     return this._code
   }
 
-  public get address(): DALIAddress {
+  public get address(): DALIAddress | undefined {
     return this._address
   }
 
-  public get value() {
+  public get value(): number | undefined {
     return this._value
   }
 
-  public get valueType() {
-    return this._valueType
+  public get error(): Error | undefined {
+    return this._error
   }
 
-  constructor(code: DALICommandCode, address: DALIAddress, value?: number) {
-    this._code = code
-    this._address = address
-    this._value = value
+  public get valueType() {
+    return DALICommand.ValueTypeForCommand(this._code)
+  }
+
+  constructor(code: DALICommandObj);
+  constructor(code: DALICommandCode, address?: DALIAddress, value?: number);
+  constructor(codeOrObj: DALICommandCode | DALICommandObj, address?: DALIAddress, value?: number) {
+    const obj = codeOrObj as DALICommandObj
+    let isObj = false
+    if (obj.code) {
+      isObj = true
+    }
+
+    if (isObj) {
+      this._code = obj.code
+      this._address = DALICommand.AddressFromObj(obj)
+      this._value = DALICommand.ValueFromObj(obj)
+    } else {
+      this._code = codeOrObj as DALICommandCode
+      this._address = address
+      this._value = value
+    }
 
     if (!this.isValid()) {
       throw new Error('Wrong format of DALI command')
@@ -198,13 +288,157 @@ export class DALICommand {
   }
 
   isValid(): boolean {
+    if (this._code === DALICommandCode.DAPC) {
+      if (this._value == null) {
+        this._error = new Error(`Command code DAPC' can't have undefined value`)
+        return false
+      }
+      return true
+    }
+
+    if ((this._code >= DALICommandCode.Off && this._code <= DALICommandCode.GoToLastActiveLevel) 
+      || (this._code >= DALICommandCode.Reset && this._code <= DALICommandCode.StoreDTRasFadeRate)
+      || this._code === DALICommandCode.StoreDTRasShortAddress
+      || (this._code >= DALICommandCode.QueryStatus && this._code <= DALICommandCode.QueryPowerFailure)
+      || (this._code >= DALICommandCode.QueryActualLevel && this._code <= DALICommandCode.QueryFadeTimeAndRate)
+      || (this._code >= DALICommandCode.QueryGroups0_7 && this._code <= DALICommandCode.ReadMemoryLocation)
+      || (this._code >= DALICommandCode.ReferenceSystemPower && this._code <= DALICommandCode.StoreDTRasFastFadeTime)
+      || (this._code >= DALICommandCode.QueryGearType && this._code <= DALICommandCode.QueryExtendedVersionNumber)) {
+      if (this._value != null) {
+        this._error = new Error(`Command code HEX(${this._code.toString(16).toUpperCase()}) can't have defined value HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+
+    if (this._code === DALICommandCode.GoToScene || DALICommandCode.StoreDTRasScene || DALICommandCode.RemoveScene || DALICommandCode.QuerySceneLevel) {
+      if (this._value != null && this._value < 0 && this._value > 15) {
+        this._error = new Error(`Command codes 'GoToScene', 'StoreDTRasScene' and 'RemoveScene' must have value between 0 and 15, is HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+
+    if (this._code === DALICommandCode.AddToGroup || DALICommandCode.RemoveFromGroup) {
+      if (this._value != null && this._value < 0 && this._value > 15) {
+        this._error = new Error(`Command codes 'AddToGroup' and 'RemoveFromGroup' must have value between 0 and 15, is HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+
+    // Special commands
+
+    if (this._code === DALICommandCode.Terminate
+      || (this._code >= DALICommandCode.Randomize && this._code <= DALICommandCode.Ping)
+      || this._code === DALICommandCode.QueryShortAddress || this._code === DALICommandCode.PhysicalSelection) {
+      if (this._value != null) {
+        this._error = new Error(`Command code 'HEX(${this._code.toString(16).toUpperCase()})' can't have defined value HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+
+    if ((this._code === DALICommandCode.DataTransferRegister || this._code === DALICommandCode.Initialize)
+      || (this._code >= DALICommandCode.SearchAddressH && this._code <= DALICommandCode.SearchAddressL)
+      || (this._code >= DALICommandCode.EnableDeviceOfType && this._code < DALICommandCode.WriteMemoryLocation)) {
+      if (this._value != null && this._value < 0 && this._value > 255) {
+        this._error = new Error(`Command codes 'AddToGroup', 'RemoveFromGroup' and 'RemoveScene' must have value between 0 and 255, is HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+
+    if (this._code >= DALICommandCode.SearchAddressH && this._code <= DALICommandCode.SearchAddressL) {
+      if (this._value != null && this._value < 0 && this._value > 255) {
+        this._error = new Error(`Command codes 'SearchAddressH/M/L' must have value between 0 and 255, is HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+
+    if (this._code === DALICommandCode.ProgramShortAddress || this._code === DALICommandCode.VerifyShortAddress) {
+      if (this._value != null && this._value < 0 && this._value > 63) {
+        this._error = new Error(`Command codes 'ProgramShortAddress' and 'VerifyShortAddress' must have value between 0 and 63, is HEX(${this._value.toString(16).toUpperCase()})`)
+        return false
+      }
+      return true
+    }
+    
+
     return false
   }
 
-  bytecode(): number {
+  _addressBytecode(): number {
+    if (this._address) {
+      if (this._address.type === DALIAddressType.Broadcast) {
+        return 0xFE // 11111110
+      }
+      if (this._address.type === DALIAddressType.Group) {
+        return 0x80 + ((this._address.value as number) * 2) // 100gggg0
+      }
+      if (this._address.type === DALIAddressType.Short) {
+        return (this._address.value as number) * 2 //0ssssss0
+      }
+    }
     return 0
   }
 
+  bytecode(): number {
+    let addr = this._addressBytecode()
+    let val = this._value as number
+    if (val == null) {
+      val = 0
+    }
+
+    // special commands
+    if (this._code >= DALICommandCode.Terminate) {
+      const code = (this._code - 256) * 2 + 0xA1 << 8
+
+      if ((this._code === DALICommandCode.DataTransferRegister || this._code === DALICommandCode.Initialize)
+      || (this._code >= DALICommandCode.EnableDeviceOfType && this._code < DALICommandCode.WriteMemoryLocation)) {
+        return code + val || 0 // 101ccccc dddddddd || 110ccccc dddddddd
+      }
+
+      if (this._code === DALICommandCode.ProgramShortAddress || this._code === DALICommandCode.VerifyShortAddress) {
+        return code + (val << 1) + 1 // 101ccccc 0aaaaaa1 || 110ccccc 0aaaaaa1
+      }
+
+      if (this._code >= DALICommandCode.SearchAddressH && this._code <= DALICommandCode.SearchAddressL) {
+        let randVal = 0
+        if (this._code === DALICommandCode.SearchAddressH) {
+          randVal = (val & 0xFF0000) >> 16
+        }
+        if (this._code === DALICommandCode.SearchAddressM) {
+          randVal = (val & 0x00FF00) >> 8
+        }
+        if (this._code === DALICommandCode.SearchAddressL) {
+          randVal = (val & 0x0000FF)
+        }
+        return code + randVal || 0 // 101ccccc dddddddd
+      }
+
+      return code // 101ccccc 00000000 || 110ccccc 00000000
+    }
+
+    // DAPC
+    if (this._code === DALICommandCode.DAPC) {
+      return (addr << 8) + val // aaaaaa0 dddddddd
+    }
+
+    // Commands with scene
+    if (this._code === DALICommandCode.GoToScene || DALICommandCode.StoreDTRasScene || DALICommandCode.RemoveScene) {
+      return ((addr + 1) << 8) + this._code + val // aaaaaaa1 ccccssss
+    }
+
+    // Commands with group
+    if (this._code === DALICommandCode.AddToGroup || DALICommandCode.RemoveFromGroup) {
+      return ((addr + 1) << 8) + this._code + val // aaaaaaa1 ccccgggg
+    }
+
+    // commands without value (everything else)
+    return ((addr + 1) << 8) + this._code // aaaaaaa1 cccccccc
+  }
 }
 
 
@@ -215,7 +449,33 @@ export class DALIResponse {
     return this._value
   }
 
-  constructor(bytecode: number) {
-    this._value = bytecode
+  constructor(bytecode: number, code: DALICommandCode) {
+    if (code === DALICommandCode.QueryStatus 
+      || (code >= DALICommandCode.QueryVersionNumber && code <= DALICommandCode.QueryPhysicalMinLevel)
+      || (code >= DALICommandCode.QueryActualLevel && code <= DALICommandCode.QueryFadeTimeAndRate)
+      || (code >= DALICommandCode.QuerySceneLevel && code <= DALICommandCode.ReadMemoryLocation)
+      || (code >= DALICommandCode.QueryGearType && code <= DALICommandCode.QueryFailStatus)
+      || (code >= DALICommandCode.QueryOperatingMode && code <= DALICommandCode.QueryMinFastFadeTime)
+      || code === DALICommandCode.QueryShortAddress) {
+      this._value = bytecode as number
+    }
+    
+    if ((code >= DALICommandCode.QueryGearPresent && code <= DALICommandCode.QueryMissingShortAddress)
+      || code === DALICommandCode.QueryPowerFailure
+      || (code >= DALICommandCode.QueryShortCircuit && code <= DALICommandCode.QueryCurrentProtectorEnable)
+      || code === DALICommandCode.Compare
+      || code === DALICommandCode.VerifyShortAddress) {
+      this._value = bytecode as number
+    }
+
+    if (code === DALICommandCode.QueryExtendedVersionNumber || code === DALICommandCode.WriteMemoryLocation) {
+      if (bytecode == 0) {
+        this._value = false as boolean
+      } else {
+        this._value = bytecode as number
+      }
+    }
+
+    throw new Error(`DALI Command HEX(${code}) has no defined response. You can't create one.`)
   }
 }
