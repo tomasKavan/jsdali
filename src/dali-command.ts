@@ -123,7 +123,9 @@ export const enum DALIValueType {
   Scene,
   Short,
   Random,
-  Null
+  DataByteAndFalse,
+  Boolean,
+  Null,
 }
 
 export type DALIAddress = {
@@ -139,6 +141,7 @@ export type DALICommandObj = {
   dataByte?: number,
   group?: number,
   scene?: number,
+  short?: number,
   random?: number,
 }
 
@@ -236,6 +239,81 @@ export class DALICommand {
 
   public static Off(address: DALIAddress) {
     return new DALICommand(DALICommandCode.Off, address)
+  }
+
+  public static CommandWithBytecode(bytecode: number): DALICommand {
+    if (bytecode < 0 || bytecode > 65535) {
+      throw new Error('Invalid DALI data message')
+    }
+
+    console.log(`Bytecode: ${bytecode.toString(16)}`)
+    const addrTypeBytecode = (bytecode & 0xE000) >> 13
+    console.log(`Addr Type: ${addrTypeBytecode}`)
+    let addr: DALIAddress | undefined
+    let commandCode: DALICommandCode = DALICommandCode.DAPC
+    let value: number | undefined
+    if (addrTypeBytecode === 0x5 || addrTypeBytecode === 0x6) {
+      // Special command
+      commandCode = ((bytecode & 0x3E00) >> 9) / 2 + 255
+      value = bytecode & 0xFF
+
+      if (commandCode === DALICommandCode.ProgramShortAddress || commandCode === DALICommandCode.VerifyShortAddress) {
+        value = (value & 0x7E) >> 1
+      }
+
+    } else {
+      if (addrTypeBytecode < 0x4) {
+        // Short
+        addr = {
+          type: DALIAddressType.Short,
+          value: (bytecode & 0x7E00) >> 9
+        }
+      } else if (addrTypeBytecode === 0x4) {
+        // Group
+        addr = {
+          type: DALIAddressType.Group,
+          value: (bytecode & 0x1E00) >> 9
+        }
+      } else {
+        // It's broadcast
+        addr = {
+          type: DALIAddressType.Broadcast,
+          value: bytecode & 0x1E00 >> 9
+        }
+      }
+
+      if ((bytecode & 0x100) !== 0x100) {
+        commandCode = DALICommandCode.DAPC
+        value = bytecode & 0xFF
+      } else {
+        commandCode = bytecode & 0xFF
+        if (commandCode >= DALICommandCode.GoToScene && commandCode < (DALICommandCode.GoToScene + 16)) {
+          value = DALICommandCode.GoToScene - commandCode
+          commandCode = DALICommandCode.GoToScene
+        }
+        if (commandCode >= DALICommandCode.StoreDTRasScene && commandCode < (DALICommandCode.StoreDTRasScene + 16)) {
+          value = DALICommandCode.StoreDTRasScene - commandCode
+          commandCode = DALICommandCode.StoreDTRasScene
+        }
+        if (commandCode >= DALICommandCode.RemoveScene && commandCode < (DALICommandCode.RemoveScene + 16)) {
+          value = DALICommandCode.RemoveScene - commandCode
+          commandCode = DALICommandCode.RemoveScene
+        }
+        if (commandCode >= DALICommandCode.AddToGroup && commandCode < (DALICommandCode.AddToGroup + 16)) {
+          value = DALICommandCode.AddToGroup - commandCode
+          commandCode = DALICommandCode.AddToGroup
+        }
+        if (commandCode >= DALICommandCode.RemoveFromGroup && commandCode < (DALICommandCode.RemoveFromGroup + 16)) {
+          value = DALICommandCode.RemoveFromGroup - commandCode
+          commandCode = DALICommandCode.RemoveFromGroup
+        }
+        if (commandCode >= DALICommandCode.QuerySceneLevel && commandCode < (DALICommandCode.QuerySceneLevel + 16)) {
+          value = DALICommandCode.QuerySceneLevel - commandCode
+          commandCode = DALICommandCode.QuerySceneLevel
+        }
+      }
+    }
+    return new DALICommand(commandCode, addr, value)
   }
 
   private _code: DALICommandCode
@@ -391,7 +469,7 @@ export class DALICommand {
       val = 0
     }
 
-    // special commands
+    // Special commands
     if (this._code >= DALICommandCode.Terminate) {
       const code = (this._code - 256) * 2 + 0xA1 << 8
 
@@ -436,46 +514,71 @@ export class DALICommand {
       return ((addr + 1) << 8) + this._code + val // aaaaaaa1 ccccgggg
     }
 
-    // commands without value (everything else)
+    // Commands without value (everything else)
     return ((addr + 1) << 8) + this._code // aaaaaaa1 cccccccc
   }
 }
 
 
 export class DALIResponse {
-  private _value: number | boolean
-
-  public get value() {
-    return this._value
-  }
-
-  constructor(bytecode: number, code: DALICommandCode) {
+  public static TypeFromCode(code: DALICommandCode): DALIValueType {
     if (code === DALICommandCode.QueryStatus 
       || (code >= DALICommandCode.QueryVersionNumber && code <= DALICommandCode.QueryPhysicalMinLevel)
       || (code >= DALICommandCode.QueryActualLevel && code <= DALICommandCode.QueryFadeTimeAndRate)
       || (code >= DALICommandCode.QuerySceneLevel && code <= DALICommandCode.ReadMemoryLocation)
       || (code >= DALICommandCode.QueryGearType && code <= DALICommandCode.QueryFailStatus)
-      || (code >= DALICommandCode.QueryOperatingMode && code <= DALICommandCode.QueryMinFastFadeTime)
-      || code === DALICommandCode.QueryShortAddress) {
-      this._value = bytecode as number
+      || (code >= DALICommandCode.QueryOperatingMode && code <= DALICommandCode.QueryMinFastFadeTime)) {
+      if (code >= DALICommandCode.QueryRandomAddressH && code <= DALICommandCode.QueryRandomAddressL) {
+        return DALIValueType.Random
+      }
+      return DALIValueType.DataByte
     }
-    
+    if (code === DALICommandCode.QueryShortAddress) {
+      return DALIValueType.Short
+    }
+
     if ((code >= DALICommandCode.QueryGearPresent && code <= DALICommandCode.QueryMissingShortAddress)
       || code === DALICommandCode.QueryPowerFailure
       || (code >= DALICommandCode.QueryShortCircuit && code <= DALICommandCode.QueryCurrentProtectorEnable)
       || code === DALICommandCode.Compare
       || code === DALICommandCode.VerifyShortAddress) {
-      this._value = bytecode as number
+      return DALIValueType.Boolean
     }
 
     if (code === DALICommandCode.QueryExtendedVersionNumber || code === DALICommandCode.WriteMemoryLocation) {
+      return DALIValueType.DataByteAndFalse
+    }
+
+    return DALIValueType.Null
+  }
+  
+  private _value: number | boolean | null
+  private _type: DALIValueType
+
+  public get value() {
+    return this._value
+  }
+
+  public get valueType() {
+    return this._type
+  }
+
+  constructor(bytecode: number, code: DALICommandCode) {
+    this._type = DALIResponse.TypeFromCode(code)
+    if (this._type === DALIValueType.Boolean) {
+      this._value = !!bytecode as boolean
+    } else if (this._type === DALIValueType.DataByte || this._type === DALIValueType.Random) {
+      this._value = bytecode as number
+    } else if (this._type === DALIValueType.DataByteAndFalse) {
       if (bytecode == 0) {
         this._value = false as boolean
       } else {
         this._value = bytecode as number
       }
+    } else if (this._type === DALIValueType.Short) {
+      this._value = ((bytecode % 0xFF) & 0x7E) >> 1
+    } else {
+      this._value = null
     }
-
-    throw new Error(`DALI Command HEX(${code}) has no defined response. You can't create one.`)
   }
 }

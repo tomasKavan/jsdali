@@ -5,6 +5,7 @@ import {
   DALICommandObj, 
   DALIResponse, 
   DALICommandCode } from "./dali-command"
+import { EventEmitter } from 'stream'
 
 const BOOT_WAITING_TIME_MS = 5000
 
@@ -46,6 +47,13 @@ export const enum FoxtronDALIASCIISpecMessage {
   ChannelToControllerNotOpen = 255
 }
 
+export const enum FoxtronDALIASCIIResponseEvent {
+  Response = 'response',
+  NoResponse = 'no-response',
+  SpecReceived = 'spec-received',
+  Any = 'any-response'
+}
+
 type FoxtronDALIASCIIRequest = {
   type: FoxtronDALIASCIIRequestType,
   daliCommand?: DALICommand | DALICommandObj,
@@ -60,6 +68,7 @@ type FoxtronDALIASCIIResponse = {
   type: FoxtronDALIASCIIResponseType,
   request?: FoxtronDALIASCIIRequest
   daliResponse?: DALIResponse,
+  daliCommand?: DALICommand,
   itemIndex?: Number,
   itemData?: Number,
   setConfigAckFlag?: FoxtronDALIASCIIConfigResetAckFlag,
@@ -72,14 +81,21 @@ export const enum BootMethod {
   SetDTR
 }
 
+type RequesInProcess = {
+  request: FoxtronDALIASCIIRequest,
+  promise: Promise<FoxtronDALIASCIIResponse>,
+  resolve?: (value: FoxtronDALIASCIIResponse | PromiseLike<FoxtronDALIASCIIResponse>) => void
+  reject?: (reason?: any) => void
+}
+
 const SOH = String.fromCharCode(0x01)
 const ETB = String.fromCharCode(0x17)
 
-export class FoxtronDaliAscii {
+export class FoxtronDaliAscii extends EventEmitter {
 
   private static _MessageTypeStr(type: FoxtronDALIASCIIRequestType): string {
     let out = ''
-    if (type < 10) {
+    if (type < 0x10) {
       out = '0'
     }
     return out + type.toString(16).toUpperCase()
@@ -127,31 +143,61 @@ export class FoxtronDaliAscii {
     return ret + val.toString(16).toUpperCase()
   }
 
+  private static _ResponseFromStr(str: string): FoxtronDALIASCIIResponse {
+    console.log(str)
+    const resp: FoxtronDALIASCIIResponse = {
+      type: parseInt(str.substring(1, 3), 16)
+    }
+    if (resp.type === FoxtronDALIASCIIResponseType.Response || resp.type === FoxtronDALIASCIIResponseType.DistinctResponse 
+      ||resp.type === FoxtronDALIASCIIResponseType.NoResponse || resp.type === FoxtronDALIASCIIResponseType.DistinctNoResponse) {
+      const dataLength = parseInt(str.substring(3,5), 16)
+      if (dataLength !== 16) {
+        throw new Error(`DALI Message must be 16 bits long. It's ${dataLength} bits long`)
+      }
+      resp.daliCommand = DALICommand.CommandWithBytecode(parseInt(str.substring(5,9), 16))
+
+      if (resp.type === FoxtronDALIASCIIResponseType.Response || resp.type === FoxtronDALIASCIIResponseType.DistinctResponse) {
+        const responseLength = parseInt(str.substring(9,11), 16)
+        if (responseLength !== 8) {
+          throw new Error(`DALI Response must be 8 bits long. It's ${dataLength} bits long`)
+        }
+        resp.daliResponse = new DALIResponse(parseInt(str.substring(11,13), 16), resp.daliCommand.code)
+      }
+
+    } if (resp.type === FoxtronDALIASCIIResponseType.ConfResponse || resp.type === FoxtronDALIASCIIResponseType.ConfChangeAck) {
+      resp.itemIndex = parseInt(str.substring(3,5), 16)
+      resp.itemData = parseInt(str.substring(5,9), 16)
+      if (resp.type === FoxtronDALIASCIIResponseType.ConfChangeAck) {
+        resp.setConfigAckFlag = parseInt(str.substring(9,11), 16)
+      }
+    } else if (resp.type === FoxtronDALIASCIIResponseType.SpecReceived) {
+      resp.specialMessage = parseInt(str.substring(3,5))
+    }
+    return resp
+  }
+
   private _port: SerialPort
   private _parser: ReadlineParser
   private _bootMethod: BootMethod = BootMethod.Running
   private _waitForBoot: boolean = false
-  private _requestInProcess?: {
-    request: FoxtronDALIASCIIRequest,
-    promise: Promise<FoxtronDALIASCIIResponse>,
-    resolve?: (value: FoxtronDALIASCIIResponse | PromiseLike<FoxtronDALIASCIIResponse>) => void
-    reject?: (reason?: any) => void
-  }
+  private _requestInProcess?: RequesInProcess
 
   constructor(obj: {path: string, bootMethod?: BootMethod}) {
+    super()
+
     if (obj.bootMethod) {
       this._bootMethod = obj.bootMethod
     }
+
     if (this._bootMethod !== BootMethod.Running) {
       this._waitForBoot = true
     }
 
     this._port = new SerialPort({ path: obj.path, baudRate: 19200, parity: 'even', stopBits: 1})
-    this._port.on('open', this._portOpenHandler)
+    this._port.on('open', this._portOpenHandler.bind(this))
 
     this._parser = this._port.pipe(new ReadlineParser({ delimiter: ETB, includeDelimiter: true}))
-    this._parser.on('data', this._readHandler)
-
+    this._parser.on('data', this._readHandler.bind(this))
   }
 
   public get port(): SerialPort {
@@ -159,11 +205,13 @@ export class FoxtronDaliAscii {
   }
 
   public get isOpen(): boolean {
-    return this._port.isOpen && this._waitForBoot
+    return this._port.isOpen && !this._waitForBoot
   }
 
 
   public sendCmd(cmd: DALICommand | DALICommandObj | FoxtronDALIASCIIRequest): Promise<FoxtronDALIASCIIResponse | null> {
+    let promise : Promise<FoxtronDALIASCIIResponse | null> = Promise.resolve(null)
+
     if (!this.isOpen) {
       return Promise.resolve({
         type: FoxtronDALIASCIIResponseType.SpecReceived, 
@@ -198,15 +246,17 @@ export class FoxtronDaliAscii {
 
         let res: ((value: FoxtronDALIASCIIResponse | PromiseLike<FoxtronDALIASCIIResponse>) => void) | undefined
         let rej: ((reason?: any) => void) | undefined
+        let surePromise = new Promise<FoxtronDALIASCIIResponse>((resolve, reject) => {
+          res = resolve
+          rej = reject
+        })
         this._requestInProcess = {
           request: cmdFox,
-          promise: new Promise<FoxtronDALIASCIIResponse>((resolve, reject) => {
-            res = resolve
-            rej = reject
-          })
+          promise: surePromise
         }
         this._requestInProcess.resolve = res
         this._requestInProcess.reject = rej
+        promise = surePromise
     }
 
     let message = FoxtronDaliAscii._MessageTypeStr(cmdFox.type)
@@ -215,7 +265,12 @@ export class FoxtronDaliAscii {
       || cmdFox.type === FoxtronDALIASCIIRequestType.ContiuousSend) {
       message += FoxtronDaliAscii._PriorityStr(cmdFox)
       message += '10' // DALI request has always 16 bits
-      message += (cmdFox.daliCommand as DALICommand).bytecode().toString(16)
+
+      const bytecode = (cmdFox.daliCommand as DALICommand).bytecode()
+      if (bytecode < 0x1000) {
+        message +='0'
+      }
+      message += bytecode.toString(16).toUpperCase()
 
       if (cmdFox.type === FoxtronDALIASCIIRequestType.DistinctSend) {
         message += FoxtronDaliAscii._DistinctParam(cmdFox)
@@ -232,12 +287,18 @@ export class FoxtronDaliAscii {
     }
 
     message += this._sumcheck(message)
+    console.log(`Sending: ${message}`)
     this._port.write(SOH + message + ETB)
 
-    return Promise.resolve(null)
+    return promise
   }
 
   public reset() {
+    if (this._requestInProcess) {
+      if (this._requestInProcess.reject) {
+        this._requestInProcess.reject(new Error('Canceled'))
+      }
+    }
     this._requestInProcess = undefined
   }
 
@@ -269,12 +330,37 @@ export class FoxtronDaliAscii {
       if (this._bootMethod === BootMethod.SetDTR) {
         await this._port.set({dtr: true})
       }
-      setTimeout(this._waitingForBootFinished, BOOT_WAITING_TIME_MS)
+      setTimeout(this._waitingForBootFinished.bind(this), BOOT_WAITING_TIME_MS)
     }
   }
 
   private _readHandler(data : string) {
+    const idx = data.indexOf(SOH)
+    data = data.substring(idx)
+    console.log(data.split('').map((item) => { return item.charCodeAt(0).toString(16) }))
+    const response = FoxtronDaliAscii._ResponseFromStr(data)
+    if (response.type === FoxtronDALIASCIIResponseType.DistinctNoResponse || response.type === FoxtronDALIASCIIResponseType.DistinctResponse) {
+      if (this._requestInProcess) {
+        if (this._requestInProcess.resolve) {
+          const ripres = this._requestInProcess.resolve
+          this._requestInProcess = undefined
+          ripres(response)
 
+        }
+      }
+      return
+    }
+
+    if (response.type === FoxtronDALIASCIIResponseType.Response) {
+      this.emit(FoxtronDALIASCIIResponseEvent.Response, response)
+    }
+    if (response.type === FoxtronDALIASCIIResponseType.NoResponse) {
+      this.emit(FoxtronDALIASCIIResponseEvent.NoResponse, response)
+    }
+    if (response.type === FoxtronDALIASCIIResponseType.SpecReceived) {
+      this.emit(FoxtronDALIASCIIResponseEvent.SpecReceived, response)
+    }
+    this.emit(FoxtronDALIASCIIResponseEvent.Any, response)
   }
 
   private _waitingForBootFinished() {
