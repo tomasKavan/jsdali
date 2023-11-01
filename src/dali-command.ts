@@ -91,24 +91,26 @@ export const enum DALICommandCode {
   QueryExtendedVersionNumber = 255,  // response is no or number (0-255)
 
   // Special commands (opcode = (val-255)*256)
-  Terminate = 256,
-  DataTransferRegister = 258,  // param number (0-255) 
-  Initialize = 260,  // param number (0-255)
-  Randomize = 262, 
-  Compare = 264,  // response is yes/no
-  Withdraw = 266,
-  Ping = 270,
-  SearchAddressH = 272,  // param number (0-255), 8bit
-  SearchAddressM = 274,  // param number (0-255), 8bit
-  SearchAddressL = 276,  // param number (0-255), 8bit
-  ProgramShortAddress = 278,  // param short address (0-63)
-  VerifyShortAddress = 280,  // param short address (0-63); response is yes/no
-  QueryShortAddress = 282, // response is number (0-63)
-  PhysicalSelection = 284,
-  EnableDeviceOfType = 288,  // param number (0-255) 
-  SetDTR1 = 290,  // param number (0-255) 
-  SetDTR2 = 292,  // param number (0-255) 
-  WriteMemoryLocation = 294  // param number (0-255); response is no/number (0-255)
+  Terminate = 0xA100,
+  DataTransferRegister = 0xA300,  // param number (0-255) 
+  Initialize = 0xA500,  // param number (0-255)
+  Randomize = 0xA700, 
+  Compare = 0xA900,  // response is yes/no
+  Withdraw = 0xAB00,
+  // 0xAD reserviert
+  Ping = 0xAF00,
+  SearchAddressH = 0xB100,  // param number (0-255), 8bit
+  SearchAddressM = 0xB300,  // param number (0-255), 8bit
+  SearchAddressL = 0xB500,  // param number (0-255), 8bit
+  ProgramShortAddress = 0xB700,  // param short address (0-63)
+  VerifyShortAddress = 0xB900,  // param short address (0-63); response is yes/no
+  QueryShortAddress = 0xBB00, // response is number (0-63)
+  PhysicalSelection = 0xBD00,
+// 0xBF reserviert
+  EnableDeviceOfType = 0xC100,  // param number (0-255) 
+  SetDTR1 = 0xC300,  // param number (0-255) 
+  SetDTR2 = 0xC500,  // param number (0-255) 
+  WriteMemoryLocation = 0xC700  // param number (0-255); response is no/number (0-255)
 }
 
 export const enum DALIAddressType {
@@ -246,19 +248,17 @@ export class DALICommand {
       throw new Error('Invalid DALI data message')
     }
 
-    console.log(`Bytecode: ${bytecode.toString(16)}`)
     const addrTypeBytecode = (bytecode & 0xE000) >> 13
-    console.log(`Addr Type: ${addrTypeBytecode}`)
     let addr: DALIAddress | undefined
     let commandCode: DALICommandCode = DALICommandCode.DAPC
     let value: number | undefined
     if (addrTypeBytecode === 0x5 || addrTypeBytecode === 0x6) {
       // Special command
-      commandCode = ((bytecode & 0x3E00) >> 9) / 2 + 255
-      value = bytecode & 0xFF
+      commandCode = bytecode & 0xFF00
+      value = bytecode & 0x00FF
 
       if (commandCode === DALICommandCode.ProgramShortAddress || commandCode === DALICommandCode.VerifyShortAddress) {
-        value = (value & 0x7E) >> 1
+        value = (value & 0x007E) >> 1
       }
 
     } else {
@@ -471,7 +471,7 @@ export class DALICommand {
 
     // Special commands
     if (this._code >= DALICommandCode.Terminate) {
-      const code = (this._code - 256) * 2 + 0xA1 << 8
+      const code = this._code
 
       if ((this._code === DALICommandCode.DataTransferRegister || this._code === DALICommandCode.Initialize)
       || (this._code >= DALICommandCode.EnableDeviceOfType && this._code < DALICommandCode.WriteMemoryLocation)) {

@@ -85,7 +85,8 @@ type RequesInProcess = {
   request: FoxtronDALIASCIIRequest,
   promise: Promise<FoxtronDALIASCIIResponse>,
   resolve?: (value: FoxtronDALIASCIIResponse | PromiseLike<FoxtronDALIASCIIResponse>) => void
-  reject?: (reason?: any) => void
+  reject?: (reason?: any) => void,
+  counter: number
 }
 
 const SOH = String.fromCharCode(0x01)
@@ -144,7 +145,6 @@ export class FoxtronDaliAscii extends EventEmitter {
   }
 
   private static _ResponseFromStr(str: string): FoxtronDALIASCIIResponse {
-    console.log(str)
     const resp: FoxtronDALIASCIIResponse = {
       type: parseInt(str.substring(1, 3), 16)
     }
@@ -252,7 +252,8 @@ export class FoxtronDaliAscii extends EventEmitter {
         })
         this._requestInProcess = {
           request: cmdFox,
-          promise: surePromise
+          promise: surePromise,
+          counter: cmdFox.doubleSend ? 2 : 1
         }
         this._requestInProcess.resolve = res
         this._requestInProcess.reject = rej
@@ -287,7 +288,7 @@ export class FoxtronDaliAscii extends EventEmitter {
     }
 
     message += this._sumcheck(message)
-    console.log(`Sending: ${message}`)
+    console.log(`[FoxtronDaliAscii] Sending Message: SOH|${message}|ETB`)
     this._port.write(SOH + message + ETB)
 
     return promise
@@ -337,10 +338,24 @@ export class FoxtronDaliAscii extends EventEmitter {
   private _readHandler(data : string) {
     const idx = data.indexOf(SOH)
     data = data.substring(idx)
-    console.log(data.split('').map((item) => { return item.charCodeAt(0).toString(16) }))
+    const msg = data.split('').map((item) => {
+      if (item === SOH) {
+        return 'SOH|'
+      } 
+      if (item === ETB) {
+        return '|ETB'
+      } 
+      return item
+    }).join('')
+    console.log(`[FoxtronDaliAscii] Received message: ${msg}`)
     const response = FoxtronDaliAscii._ResponseFromStr(data)
     if (response.type === FoxtronDALIASCIIResponseType.DistinctNoResponse || response.type === FoxtronDALIASCIIResponseType.DistinctResponse) {
       if (this._requestInProcess) {
+        if (this._requestInProcess.counter > 1) {
+          console.log(`[FoxtronDaliAscii] Holding response, counter is: ${this._requestInProcess.counter--}`)
+          this._requestInProcess.counter--
+          return
+        }
         if (this._requestInProcess.resolve) {
           const ripres = this._requestInProcess.resolve
           this._requestInProcess = undefined
