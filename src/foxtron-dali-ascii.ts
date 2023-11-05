@@ -94,6 +94,20 @@ const ETB = String.fromCharCode(0x17)
 
 export class FoxtronDaliAscii extends EventEmitter {
 
+  public static SpecialDALIRequest(code: DALICommandCode, value?: number ): FoxtronDALIASCIIRequest {
+    let doubleSend = false
+    if (code === DALICommandCode.Initialize || code === DALICommandCode.Randomize) {
+      doubleSend = true
+    }
+    if (!value) {
+      value = 0
+    }
+    return {
+      type: FoxtronDALIASCIIRequestType.DistinctSend,
+      daliCommand: new DALICommand(code, undefined, value)
+    }
+  }
+
   private static _MessageTypeStr(type: FoxtronDALIASCIIRequestType): string {
     let out = ''
     if (type < 0x10) {
@@ -181,8 +195,9 @@ export class FoxtronDaliAscii extends EventEmitter {
   private _bootMethod: BootMethod = BootMethod.Running
   private _waitForBoot: boolean = false
   private _requestInProcess?: RequesInProcess
+  private _debug: boolean = false
 
-  constructor(obj: {path: string, bootMethod?: BootMethod}) {
+  constructor(obj: {path: string, bootMethod?: BootMethod, debug?: boolean}) {
     super()
 
     if (obj.bootMethod) {
@@ -191,6 +206,10 @@ export class FoxtronDaliAscii extends EventEmitter {
 
     if (this._bootMethod !== BootMethod.Running) {
       this._waitForBoot = true
+    }
+
+    if (obj.debug) {
+      this._debug = true
     }
 
     this._port = new SerialPort({ path: obj.path, baudRate: 19200, parity: 'even', stopBits: 1})
@@ -288,10 +307,21 @@ export class FoxtronDaliAscii extends EventEmitter {
     }
 
     message += this._sumcheck(message)
-    console.log(`[FoxtronDaliAscii] Sending Message: SOH|${message}|ETB`)
+    this._debug && console.log(`[FoxtronDaliAscii] Sending Message: SOH|${message}|ETB`)
     this._port.write(SOH + message + ETB)
 
     return promise
+  }
+
+  public async setSearchAddress(search: number): Promise<(FoxtronDALIASCIIResponse | null)[] | null> {
+    const setH = FoxtronDaliAscii.SpecialDALIRequest(DALICommandCode.SearchAddressH, search) 
+    const setM = FoxtronDaliAscii.SpecialDALIRequest(DALICommandCode.SearchAddressM, search) 
+    const setL = FoxtronDaliAscii.SpecialDALIRequest(DALICommandCode.SearchAddressL, search) 
+    const resp: (FoxtronDALIASCIIResponse | null)[] = []
+    resp.push(await this.sendCmd(setH))
+    resp.push(await this.sendCmd(setM))
+    resp.push(await this.sendCmd(setL))
+    return Promise.resolve(resp)
   }
 
   public reset() {
@@ -347,12 +377,12 @@ export class FoxtronDaliAscii extends EventEmitter {
       } 
       return item
     }).join('')
-    console.log(`[FoxtronDaliAscii] Received message: ${msg}`)
+    this._debug && console.log(`[FoxtronDaliAscii] Received message: ${msg}`)
     const response = FoxtronDaliAscii._ResponseFromStr(data)
     if (response.type === FoxtronDALIASCIIResponseType.DistinctNoResponse || response.type === FoxtronDALIASCIIResponseType.DistinctResponse) {
       if (this._requestInProcess) {
         if (this._requestInProcess.counter > 1) {
-          console.log(`[FoxtronDaliAscii] Holding response, counter is: ${this._requestInProcess.counter--}`)
+          this._debug && console.log(`[FoxtronDaliAscii] Holding response, counter is: ${this._requestInProcess.counter--}`)
           this._requestInProcess.counter--
           return
         }
