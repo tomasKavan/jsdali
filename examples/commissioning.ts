@@ -1,16 +1,43 @@
-import { FoxtronDaliAscii, BootMethod as FoxtronBootMethod, FoxtronDALIASCIIResponseEvent, FoxtronDALIASCIIRequestType } from './foxtron-dali-ascii'
-import { DALICommand, DALICommandCode } from './dali-command'
+import { FoxtronDaliAscii, ETB } from '../src/foxtron-dali-ascii'
+import { BootMethod as FoxtronBootMethod, FoxtronDALIASCIIResponseEvent, FoxtronDALIASCIIRequestType, FoxtronDALIASCIITransportEvent } from '../src/foxtron-dali-ascii-types'
+import { DALICommand, DALICommandCode } from '../src/dali-command'
+import { SerialTransportProvider } from '../src/serial-fox-transport'
+
+const provider = new SerialTransportProvider()
 
 const path = '/dev/tty.usbserial-A50285BI'
 console.log(`Opening serial port ${path}`)
-const master = new FoxtronDaliAscii({
+const transport = provider.foxTransport({
   path: path,
-  bootMethod: FoxtronBootMethod.SetDTR
+  baudRate: 19200,
+  parity: 'even',
+  stopBits: 1,
+  dataBits: 8
+} , { 
+  delimiter: ETB
+}, true)
+
+const master = new FoxtronDaliAscii({
+  transport: transport, 
+  bootMethod: FoxtronBootMethod.SetDTR,
+  debug: true
 })
 
 master.on(FoxtronDALIASCIIResponseEvent.Any, (response) => {
   console.log('A communication received: ')
   console.log(response)
+})
+
+master.on(FoxtronDALIASCIITransportEvent.Open, () => {
+  console.log('Master port opened')
+})
+
+master.on(FoxtronDALIASCIITransportEvent.Close, (e) => {
+  console.log('Master port closed ', e)
+})
+
+master.on(FoxtronDALIASCIITransportEvent.Error, (e) => {
+  console.log('Master port error: ', e)
 })
 
 const waitTillOpen = new Promise<void>((resolve, reject) => {
@@ -38,6 +65,14 @@ async function setRandom(master: FoxtronDaliAscii, random: number) {
   await master.sendCmd(setH)
   await master.sendCmd(setM)
   await master.sendCmd(setL)
+}
+
+async function sleep(milliseconds: number): Promise<null> {
+  return new Promise<null>((resolve, reject) => {
+    setTimeout(() => {
+      resolve(null)
+    }, milliseconds)
+  })
 }
 
 waitTillOpen.then(async () => {
@@ -133,44 +168,4 @@ waitTillOpen.then(async () => {
   }
   const setOnResp = await master.sendCmd(setOn)
   console.log(`Set on response: ${JSON.stringify(setOnResp)}`)
-
-  // Found -> search + 1
-      // Set Short address
-      // Withdraw
-
-  
-
-
-
-
-  // If true - cut lower half
-  
-
-
-  // const commands : {cmd: DALICommand, mills: number}[] = [
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.2), mills: 500},
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.3), mills: 500},
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.4), mills: 500},
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.5), mills: 500},
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.6), mills: 500},
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.7), mills: 500},
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.8), mills: 2000},
-  //   { cmd: DALICommand.Off(DALICommand.Broadcast()), mills: 2000 },
-  //   { cmd: DALICommand.DAPC(DALICommand.Broadcast(), 0.8), mills: 2000},
-  //   { cmd: DALICommand.Off(DALICommand.Broadcast()), mills: 2000 },
-  // ]
-  // for (let i in commands) {
-  //   const cmd = commands[i]
-  //   const resp = await master.sendCmd({ type: FoxtronDALIASCIIRequestType.DistinctSend, daliCommand: cmd.cmd})
-  //   console.log(resp)
-  //   await sleep(cmd.mills)
-  // }
 })
-
-async function sleep(milliseconds: number): Promise<null> {
-  return new Promise<null>((resolve, reject) => {
-    setTimeout(() => {
-      resolve(null)
-    }, milliseconds)
-  })
-}

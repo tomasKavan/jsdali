@@ -1,19 +1,19 @@
 {
-  "name": "dali",
+  "name": "jsdali",
   "version": "1.0.0",
   "description": "Node.js DALI protocol implementation",
-  "main": "main.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start:dev": "npx nodemon",
-    "build": "rimraf ./build && tsc",
-    "start": "npm run build && node build/index.js"
+    "build": "rimraf ./dist && tsc",
+    "build:example": "rimraf ./dist-example && tsc --project tsconfig-example.json",
+    "debug:example": "node dist-example/examples/commissioning.js"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tomasKavan/node-dali.git"
   },
-  "author": "Tomas Kavan <t.kavan@me.com>",
+  "author": "Tomas Kavan",
   "license": "BSD-2-Clause",
   "bugs": {
     "url": "https://github.com/tomasKavan/node-dali/issues"
@@ -23,11 +23,15 @@
     "@types/node": "^20.8.3",
     "nodemon": "^3.0.1",
     "rimraf": "^5.0.5",
-    "serialport": "^12.0.0",
     "ts-node": "^10.9.1",
     "typescript": "^5.2.2"
   },
   "dependencies": {
-    "keypress": "^0.2.1"
-  }
+    "keypress": "^0.2.1",
+    "npm-packlist": "^8.0.0",
+    "serialport": "^12.0.0"
+  },
+  "files": [
+    "dist"
+  ]
 }

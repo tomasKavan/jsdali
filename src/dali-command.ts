@@ -1,4 +1,4 @@
-export const enum DALICommandCode {
+export enum DALICommandCode {
   // Direct arc power drive
   DAPC = -1,
   
@@ -113,13 +113,13 @@ export const enum DALICommandCode {
   WriteMemoryLocation = 0xC700  // param number (0-255); response is no/number (0-255)
 }
 
-export const enum DALIAddressType {
+export enum DALIAddressType {
   Short,
   Group,
   Broadcast
 }
 
-export const enum DALIValueType {
+export enum DALIValueType {
   DataByte,
   Group,
   Scene,
@@ -147,6 +147,11 @@ export type DALICommandObj = {
   random?: number,
 }
 
+export type SerializedDALICommand = {
+  _class: 'DALICommand',
+  bytecode: number
+}
+
 export class DALICommand {
 
   public static AddressFromObj(obj: DALICommandObj): DALIAddress | undefined {
@@ -172,13 +177,13 @@ export class DALICommand {
     if (cmd === DALICommandCode.DAPC){
       return DALIValueType.DataByte
     }
-    if (cmd === DALICommandCode.GoToScene || DALICommandCode.StoreDTRasScene || DALICommandCode.RemoveScene || DALICommandCode.QuerySceneLevel) {
+    if (cmd === DALICommandCode.GoToScene || cmd === DALICommandCode.StoreDTRasScene || cmd === DALICommandCode.RemoveScene || cmd === DALICommandCode.QuerySceneLevel) {
       return DALIValueType.Scene
     }
-    if (cmd === DALICommandCode.AddToGroup || DALICommandCode.RemoveFromGroup) {
+    if (cmd === DALICommandCode.AddToGroup || cmd === DALICommandCode.RemoveFromGroup) {
       return DALIValueType.Group
     }
-    if (cmd === DALICommandCode.ProgramShortAddress || DALICommandCode.VerifyShortAddress) {
+    if (cmd === DALICommandCode.ProgramShortAddress || cmd === DALICommandCode.VerifyShortAddress) {
       return DALIValueType.Short
     }
     if (cmd >= DALICommandCode.SearchAddressH && cmd <= DALICommandCode.SearchAddressL) {
@@ -243,19 +248,23 @@ export class DALICommand {
     return new DALICommand(DALICommandCode.Off, address)
   }
 
-  public static CommandWithBytecode(bytecode: number): DALICommand {
-    if (bytecode < 0 || bytecode > 65535) {
+  public static CommandWithBytecode(bytecode: number | SerializedDALICommand): DALICommand {
+    let bcd: number = bytecode as number
+    if (typeof bytecode !== 'number') {
+      bcd = (bytecode as SerializedDALICommand).bytecode
+    }
+    if (bcd < 0 || bcd > 65535) {
       throw new Error('Invalid DALI data message')
     }
 
-    const addrTypeBytecode = (bytecode & 0xE000) >> 13
+    const addrTypeBytecode = (bcd & 0xE000) >> 13
     let addr: DALIAddress | undefined
     let commandCode: DALICommandCode = DALICommandCode.DAPC
     let value: number | undefined
     if (addrTypeBytecode === 0x5 || addrTypeBytecode === 0x6) {
       // Special command
-      commandCode = bytecode & 0xFF00
-      value = bytecode & 0x00FF
+      commandCode = bcd & 0xFF00
+      value = bcd & 0x00FF
 
       if (commandCode === DALICommandCode.ProgramShortAddress || commandCode === DALICommandCode.VerifyShortAddress) {
         value = (value & 0x007E) >> 1
@@ -266,27 +275,27 @@ export class DALICommand {
         // Short
         addr = {
           type: DALIAddressType.Short,
-          value: (bytecode & 0x7E00) >> 9
+          value: (bcd & 0x7E00) >> 9
         }
       } else if (addrTypeBytecode === 0x4) {
         // Group
         addr = {
           type: DALIAddressType.Group,
-          value: (bytecode & 0x1E00) >> 9
+          value: (bcd & 0x1E00) >> 9
         }
       } else {
         // It's broadcast
         addr = {
           type: DALIAddressType.Broadcast,
-          value: bytecode & 0x1E00 >> 9
+          value: bcd & 0x1E00 >> 9
         }
       }
 
-      if ((bytecode & 0x100) !== 0x100) {
+      if ((bcd & 0x100) !== 0x100) {
         commandCode = DALICommandCode.DAPC
-        value = bytecode & 0xFF
+        value = bcd & 0xFF
       } else {
-        commandCode = bytecode & 0xFF
+        commandCode = bcd & 0xFF
         if (commandCode >= DALICommandCode.GoToScene && commandCode < (DALICommandCode.GoToScene + 16)) {
           value = DALICommandCode.GoToScene - commandCode
           commandCode = DALICommandCode.GoToScene
@@ -314,6 +323,10 @@ export class DALICommand {
       }
     }
     return new DALICommand(commandCode, addr, value)
+  }
+
+  public static Deserialize(serialized: SerializedDALICommand): DALICommand {
+    return DALICommand.CommandWithBytecode(serialized.bytecode)
   }
 
   private _code: DALICommandCode
@@ -346,7 +359,7 @@ export class DALICommand {
   constructor(codeOrObj: DALICommandCode | DALICommandObj, address?: DALIAddress, value?: number) {
     const obj = codeOrObj as DALICommandObj
     let isObj = false
-    if (obj.code) {
+    if (obj.hasOwnProperty('code')) {
       isObj = true
     }
 
@@ -517,8 +530,20 @@ export class DALICommand {
     // Commands without value (everything else)
     return ((addr + 1) << 8) + this._code // aaaaaaa1 cccccccc
   }
+
+  serialize(): SerializedDALICommand {
+    return {
+      _class: "DALICommand",
+      bytecode: this.bytecode()
+    }
+  }
 }
 
+export type SerializedDALIResponse = {
+  _class: 'DALIResponse',
+  bytecode: number,
+  code: DALICommandCode
+}
 
 export class DALIResponse {
   public static TypeFromCode(code: DALICommandCode): DALIValueType {
@@ -551,9 +576,15 @@ export class DALIResponse {
 
     return DALIValueType.Null
   }
+
+  public static Deserialize(serialized: SerializedDALIResponse): DALIResponse {
+    return new DALIResponse(serialized.bytecode, serialized.code)
+  }
   
   private _value: number | boolean | null
   private _type: DALIValueType
+  private _code: DALICommandCode
+  private _bytecode:number
 
   public get value() {
     return this._value
@@ -564,6 +595,8 @@ export class DALIResponse {
   }
 
   constructor(bytecode: number, code: DALICommandCode) {
+    this._code = code
+    this._bytecode = bytecode
     this._type = DALIResponse.TypeFromCode(code)
     if (this._type === DALIValueType.Boolean) {
       this._value = !!bytecode as boolean
@@ -579,6 +612,14 @@ export class DALIResponse {
       this._value = ((bytecode % 0xFF) & 0x7E) >> 1
     } else {
       this._value = null
+    }
+  }
+
+  serialize(): SerializedDALIResponse {
+    return {
+      _class: 'DALIResponse',
+      bytecode: this._bytecode,
+      code: this._code
     }
   }
 }

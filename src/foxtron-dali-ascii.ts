@@ -1,85 +1,19 @@
-import { SerialPort } from 'serialport'
-import { ReadlineParser } from '@serialport/parser-readline'
 import { 
   DALICommand, 
-  DALICommandObj, 
   DALIResponse, 
   DALICommandCode } from "./dali-command"
-import { EventEmitter } from 'stream'
+import type { DALICommandObj } from './dali-command'
+import { 
+  FoxtronDALIASCIIRequestType, 
+  FoxtronDALIASCIIResponseType, 
+  FoxtronDALIASCIISpecMessage, 
+  FoxtronDALIASCIIResponseEvent,
+  BootMethod, 
+  FoxtronDALIASCIITransportEvent} from './foxtron-dali-ascii-types'
+import type { FoxtronDALIASCIIRequest, FoxtronDALIASCIIResponse, FoxtronDALIASCIIConfig, FoxtronDALIASCIITransport } from './foxtron-dali-ascii-types'
+import { EventEmitter } from 'events'
 
 const BOOT_WAITING_TIME_MS = 5000
-
-export const enum FoxtronDALIASCIIRequestType {
-  Send = 1,
-  DistinctSend = 11,
-  ConfQuery = 6,
-  ConfChange = 8,
-  SequenceEnd = 10,
-  ContiuousSend = 12,
-  FirmwareReset = 254
-}
-
-export const enum FoxtronDALIASCIIResponseType {
-  Response = 3,
-  DistinctResponse = 13,
-  NoResponse = 4,
-  DistinctNoResponse = 14,
-  ConfResponse = 7,
-  ConfChangeAck = 9,
-  SpecReceived = 5,
-  FirmwareResetAck = 255
-}
-
-export const enum FoxtronDALIASCIIConfigResetAckFlag {
-  Set = 0,
-  ReadOnlyItem = 1,
-  OutOfRange = 2
-}
-
-export const enum FoxtronDALIASCIISpecMessage {
-  VoltageOK = 0,
-  VoltageLoss = 1,
-  GridVoltageDetected = 2,
-  BadPowerSourceDetected = 3,
-  BufferFull = 4,
-  ChecksumError = 5,
-  UnknownCommand = 6,
-  ChannelToControllerNotOpen = 255
-}
-
-export const enum FoxtronDALIASCIIResponseEvent {
-  Response = 'response',
-  NoResponse = 'no-response',
-  SpecReceived = 'spec-received',
-  Any = 'any-response'
-}
-
-type FoxtronDALIASCIIRequest = {
-  type: FoxtronDALIASCIIRequestType,
-  daliCommand?: DALICommand | DALICommandObj,
-  priority?: Number,
-  doubleSend?: Boolean,
-  sequence?: Boolean,
-  itemIndex?: Number,
-  itemData?: Number
-}
-
-type FoxtronDALIASCIIResponse = {
-  type: FoxtronDALIASCIIResponseType,
-  request?: FoxtronDALIASCIIRequest
-  daliResponse?: DALIResponse,
-  daliCommand?: DALICommand,
-  itemIndex?: Number,
-  itemData?: Number,
-  setConfigAckFlag?: FoxtronDALIASCIIConfigResetAckFlag,
-  specialMessage?: FoxtronDALIASCIISpecMessage
-}
-
-export const enum BootMethod {
-  Running,
-  WaitForBoot,
-  SetDTR
-}
 
 type RequesInProcess = {
   request: FoxtronDALIASCIIRequest,
@@ -89,8 +23,8 @@ type RequesInProcess = {
   counter: number
 }
 
-const SOH = String.fromCharCode(0x01)
-const ETB = String.fromCharCode(0x17)
+export const SOH = String.fromCharCode(0x01)
+export const ETB = String.fromCharCode(0x17)
 
 export class FoxtronDaliAscii extends EventEmitter {
 
@@ -165,20 +99,27 @@ export class FoxtronDaliAscii extends EventEmitter {
     if (resp.type === FoxtronDALIASCIIResponseType.Response || resp.type === FoxtronDALIASCIIResponseType.DistinctResponse 
       ||resp.type === FoxtronDALIASCIIResponseType.NoResponse || resp.type === FoxtronDALIASCIIResponseType.DistinctNoResponse) {
       const dataLength = parseInt(str.substring(3,5), 16)
-      if (dataLength !== 16) {
-        throw new Error(`DALI Message must be 16 bits long. It's ${dataLength} bits long`)
-      }
-      resp.daliCommand = DALICommand.CommandWithBytecode(parseInt(str.substring(5,9), 16))
-
-      if (resp.type === FoxtronDALIASCIIResponseType.Response || resp.type === FoxtronDALIASCIIResponseType.DistinctResponse) {
-        const responseLength = parseInt(str.substring(9,11), 16)
-        if (responseLength !== 8) {
-          throw new Error(`DALI Response must be 8 bits long. It's ${dataLength} bits long`)
+      if (dataLength === 0) {
+        resp.framingError = true
+      } else {
+        if (dataLength !== 16) {
+          throw new Error(`DALI Message must be 16 bits long. It's ${dataLength} bits long`)
         }
-        resp.daliResponse = new DALIResponse(parseInt(str.substring(11,13), 16), resp.daliCommand.code)
-      }
+        resp.daliCommand = DALICommand.CommandWithBytecode(parseInt(str.substring(5,9), 16))
 
-    } if (resp.type === FoxtronDALIASCIIResponseType.ConfResponse || resp.type === FoxtronDALIASCIIResponseType.ConfChangeAck) {
+        if (resp.type === FoxtronDALIASCIIResponseType.Response || resp.type === FoxtronDALIASCIIResponseType.DistinctResponse) {
+          const responseLength = parseInt(str.substring(9,11), 16)
+          if (responseLength === 0) {
+            resp.framingError = true
+          } else {
+            if (responseLength !== 8) {
+              throw new Error(`DALI Response must be 8 bits long. It's ${dataLength} bits long`)
+            }
+            resp.daliResponse = new DALIResponse(parseInt(str.substring(11,13), 16), resp.daliCommand.code)
+          }
+        }
+      }
+    } else if (resp.type === FoxtronDALIASCIIResponseType.ConfResponse || resp.type === FoxtronDALIASCIIResponseType.ConfChangeAck) {
       resp.itemIndex = parseInt(str.substring(3,5), 16)
       resp.itemData = parseInt(str.substring(5,9), 16)
       if (resp.type === FoxtronDALIASCIIResponseType.ConfChangeAck) {
@@ -190,14 +131,14 @@ export class FoxtronDaliAscii extends EventEmitter {
     return resp
   }
 
-  private _port: SerialPort
-  private _parser: ReadlineParser
+  private _port: FoxtronDALIASCIITransport
   private _bootMethod: BootMethod = BootMethod.Running
   private _waitForBoot: boolean = false
   private _requestInProcess?: RequesInProcess
   private _debug: boolean = false
+  private _destroyed: boolean = false
 
-  constructor(obj: {path: string, bootMethod?: BootMethod, debug?: boolean}) {
+  constructor(obj: FoxtronDALIASCIIConfig) {
     super()
 
     if (obj.bootMethod) {
@@ -212,21 +153,20 @@ export class FoxtronDaliAscii extends EventEmitter {
       this._debug = true
     }
 
-    this._port = new SerialPort({ path: obj.path, baudRate: 19200, parity: 'even', stopBits: 1})
-    this._port.on('open', this._portOpenHandler.bind(this))
+    this._port = obj.transport
+    this._port.onOpen(this._portOpenHandler.bind(this))
+    this._port.onClose(this._portCloseHanlder.bind(this))
+    this._port.receive(this._portReadlineHandler.bind(this))
 
-    this._parser = this._port.pipe(new ReadlineParser({ delimiter: ETB, includeDelimiter: true}))
-    this._parser.on('data', this._readHandler.bind(this))
-  }
-
-  public get port(): SerialPort {
-    return this._port
   }
 
   public get isOpen(): boolean {
-    return this._port.isOpen && !this._waitForBoot
+    return !this._destroyed && this._port.isOpen && !this._waitForBoot
   }
 
+  public get destroyed(): boolean {
+    return this._destroyed
+  }
 
   public sendCmd(cmd: DALICommand | DALICommandObj | FoxtronDALIASCIIRequest): Promise<FoxtronDALIASCIIResponse | null> {
     let promise : Promise<FoxtronDALIASCIIResponse | null> = Promise.resolve(null)
@@ -307,8 +247,10 @@ export class FoxtronDaliAscii extends EventEmitter {
     }
 
     message += this._sumcheck(message)
+    console.log(this._port.send, 'aaa')
     this._debug && console.log(`[FoxtronDaliAscii] Sending Message: SOH|${message}|ETB`)
-    this._port.write(SOH + message + ETB)
+    
+    this._port.send(SOH + message + ETB)
 
     return promise
   }
@@ -331,6 +273,10 @@ export class FoxtronDaliAscii extends EventEmitter {
       }
     }
     this._requestInProcess = undefined
+  }
+
+  public close() {
+    this._port.close()
   }
 
   private _sumcheck(str: string): string {
@@ -362,10 +308,18 @@ export class FoxtronDaliAscii extends EventEmitter {
         await this._port.set({dtr: true})
       }
       setTimeout(this._waitingForBootFinished.bind(this), BOOT_WAITING_TIME_MS)
+      return
     }
+    this._waitingForBootFinished()
   }
 
-  private _readHandler(data : string) {
+  private _portCloseHanlder(e?: Error) {
+    this._destroyed = true
+    this._debug && console.log('[FoxtronDaliAscii] Transport closed')
+    this.emit(FoxtronDALIASCIITransportEvent.Close, e)
+  }
+
+  private _portReadlineHandler(data : string) {
     const idx = data.indexOf(SOH)
     data = data.substring(idx)
     const msg = data.split('').map((item) => {
@@ -410,7 +364,8 @@ export class FoxtronDaliAscii extends EventEmitter {
 
   private _waitingForBootFinished() {
     this._waitForBoot = false
+    this._debug && console.log('[FoxtronDaliAscii] Transport opened')
+    this.emit(FoxtronDALIASCIITransportEvent.Open)
   }
-
 
 }
