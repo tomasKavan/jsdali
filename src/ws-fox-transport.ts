@@ -1,5 +1,5 @@
 // import type { FoxtronDALIASCIITransport, FoxtronTransportProvider, ReadlineConfig } from "./foxtron-dali-ascii-types";
-// import type { SetOptions, PortStatus, PortInfo, OpenOptions } from '@serialport/bindings-cpp'
+// import type { SetOptions, PortStatus, PortInfo, OpenOptions } from '@serialport/bindings-interface'
 
 // export class RemoteSerialPortProvider implements FoxtronTransportProvider {
 //   private _url: string
@@ -14,7 +14,7 @@
 //     return resJson as PortInfo[]
 //   }
 
-//   foxTransport(portPath: string, config: OpenOptions, readlineConfig: ReadlineConfig): WsFoxTransport {
+//   foxTransport(config: OpenOptions, readlineConfig: ReadlineConfig): WsFoxTransport {
 //     let url = this._url
 //     if (this._url.substring(0,5) === 'https') {
 //       url = url.replace('https', '')
@@ -22,7 +22,7 @@
 //     if (this._url.substring(0,4) === 'http') {
 //       url = url.replace('http', '')
 //     }
-//     return new WsFoxTransport(url + '/port' + portPath, config, readlineConfig)
+//     return new WsFoxTransport(url + '/port' + config.path, config, readlineConfig)
 //   }
 // }
 

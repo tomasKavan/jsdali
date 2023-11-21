@@ -163,7 +163,7 @@ export class DALICommand {
     }
     if (obj.groupAddress != null) {
       return {
-        type: DALIAddressType.Short,
+        type: DALIAddressType.Group,
         value: obj.groupAddress as number
       }
     }

@@ -93,6 +93,19 @@ export interface FoxtronDALIASCIITransport {
   close(): void
 }
 
+// export enum SerialPortParity {
+//   None = 'none',
+//   Even = 'even',
+//   Odd = 'odd'
+// }
+
+// export type SerialPortConfig = {
+//   baudRate: number,
+//   parity: SerialPortParity,
+//   stopBits: 1 | 1.5 | 2,
+//   dataBits: 8 | 7 | 6 | 5
+// }
+
 export type ReadlineConfig = { 
   delimiter: string, 
   includeDelimiter?: boolean
